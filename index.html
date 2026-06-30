@@ -39,6 +39,8 @@
         }
 
         h1, h2, h3 { text-align: center; color: var(--accent-color); margin: 5px 0; }
+        
+        .flex-center { display: flex; align-items: center; justify-content: space-between; margin-bottom: 5px; }
 
         .network-panel, .deck-status {
             background: rgba(0,0,0,0.3);
@@ -61,9 +63,17 @@
         }
 
         input, select { background: #111; color: #fff; }
-        button { background: var(--accent-color); color: #111; font-weight: bold; cursor: pointer; }
+        button { background: var(--accent-color); color: #111; font-weight: bold; cursor: pointer; transition: 0.2s; }
         button:hover { background: #e0b463; }
         button.danger { background: var(--dispel-color); color: white; border-color: #9b2c2c; }
+
+        .sm-btn {
+            padding: 4px 10px;
+            font-size: 11px;
+            margin-left: 8px;
+            border-radius: 4px;
+            font-family: inherit;
+        }
 
         /* The Board Grid */
         .board-layout {
@@ -126,7 +136,7 @@
             align-items: center;
             margin-bottom: 5px;
         }
-        .wizard-title { font-weight: bold; color: var(--accent-color); font-size: 14px; }
+        .wizard-title { font-weight: bold; color: var(--accent-color); font-size: 14px; word-break: break-all; }
 
         /* Card Styling */
         .card {
@@ -177,7 +187,6 @@
             box-shadow: 0 2px 4px rgba(0,0,0,0.5);
         }
 
-        /* Tooltip style - Made bigger with larger text size */
         .tooltip {
             position: absolute;
             background: #111;
@@ -190,7 +199,6 @@
             z-index: 1000;
             display: none;
             box-shadow: 0 6px 15px rgba(0,0,0,0.8);
-            text-transform: none;
             font-family: sans-serif;
             line-height: 1.6;
         }
@@ -226,25 +234,25 @@
 
     <div class="deck-status">
         <span id="deck-count">Cards in Deck: 36</span>
-        <span style="margin-left: 15px;">Turn: 
-            <select id="turn-select">
-                <option value="p1">Player 1 (Host)</option>
-                <option value="p2">Player 2 (Guest)</option>
-            </select>
-        </span>
-        <button id="btn-deal" style="margin-left: 15px;">Roll Winds of Magic (2D6)</button>
-        <button id="btn-draw-p1">P1 Draw 1</button>
-        <button id="btn-draw-p2">P2 Draw 1</button>
-        <button id="btn-clear-field" class="danger">End Phase / Clear Field</button>
+        <button id="btn-roll-p1" style="margin-left: 15px;">P1 Roll Winds</button>
+        <button id="btn-roll-p2">P2 Roll Winds</button>
+        <button id="btn-undo" style="margin-left: 15px;">Undo Last Action</button>
+        <button id="btn-clear-field" class="danger">End Magic Phase</button>
     </div>
 
     <div class="board-layout">
         
         <div class="player-side">
-            <h2>Player 1 (Host)</h2>
+            <h2>
+                <span id="p1-name-display">Player 1</span> (Host) 
+                <button class="sm-btn" onclick="setName('p1')" title="Change Name">✏️</button>
+            </h2>
             <button onclick="addWizard('p1')">+ Add Wizard Storage</button>
             
-            <h3>Active Hand</h3>
+            <div class="flex-center">
+                <h3 style="margin: 0;">Active Hand</h3>
+                <button class="sm-btn" onclick="drawTo('p1', 'hand')">Draw 1 to Hand</button>
+            </div>
             <div id="p1-hand" class="drop-zone" data-pool="hand" data-player="p1"></div>
             
             <div id="p1-wizards"></div>
@@ -259,10 +267,16 @@
         </div>
 
         <div class="player-side">
-            <h2>Player 2 (Guest)</h2>
+            <h2>
+                <span id="p2-name-display">Player 2</span> (Guest)
+                <button class="sm-btn" onclick="setName('p2')" title="Change Name">✏️</button>
+            </h2>
             <button onclick="addWizard('p2')">+ Add Wizard Storage</button>
             
-            <h3>Active Hand</h3>
+            <div class="flex-center">
+                <h3 style="margin: 0;">Active Hand</h3>
+                <button class="sm-btn" onclick="drawTo('p2', 'hand')">Draw 1 to Hand</button>
+            </div>
             <div id="p2-hand" class="drop-zone" data-pool="hand" data-player="p2"></div>
             
             <div id="p2-wizards"></div>
@@ -276,7 +290,6 @@
 <script>
     const PEER_CONFIG = { host: '0.peerjs.com', port: 443, path: '/', secure: true };
     
-    // Exact Rules Verbatim Text definitions
     const CARD_RULES = {
         'Power': 'Any wizard may use this card to attempt to cast a spell.<br><br>Each spell can only be attempted cast once per magic phase.<br><br>Announce which spell you cast and the intended target.<br><br>Discard as many power cards as required to power the spell.',
         'Dispel': 'Each wizard in the army may make one attempt against each spell cast by expending a dispel card. The chance of dispelling is usually 4+; 5+ if the dispelling wizard’s level is two levels lower than the casting wizard; 3+ if the dispelling wizard’s level is two levels higher than the casting wizard.<br><br>If you have no more wizards left for dispel attempts you may attempt to dispel without the aid of a wizard by expending dispel cards, but you must roll 5+ to dispel regardless of the magic level of the caster. Ignore the special effects of special magic cards when dispelling spells without the aid of a wizard.',
@@ -302,28 +315,79 @@
     let state = {
         deck: [],
         played: [],
-        p1: { hand: [], wizards: [] },
-        p2: { hand: [], wizards: [] },
-        activeTurn: 'p1'
+        p1: { name: 'Player 1', hand: [], wizards: [] },
+        p2: { name: 'Player 2', hand: [], wizards: [] }
     };
-
+    
+    let stateHistory = []; // Local history stack for Undo
     let peer = null, conn = null, myRole = null; 
+
+    // ---- Core Utilities ----
+    
+    // Strict input sanitizer to prevent HTML/XSS injection
+    function sanitize(str) {
+        if (typeof str !== 'string') return '';
+        const map = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#x27;', "/": '&#x2F;' };
+        const reg = /[&<>"'/]/ig;
+        return str.replace(reg, (match)=>(map[match]));
+    }
+
+    function shuffleDeck(deckArr) {
+        for (let i = deckArr.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [deckArr[i], deckArr[j]] = [deckArr[j], deckArr[i]];
+        }
+    }
+
+    function saveState() {
+        stateHistory.push(JSON.stringify(state));
+        if(stateHistory.length > 30) stateHistory.shift();
+    }
 
     function initDeck() {
         state.deck = JSON.parse(JSON.stringify(ORIGINAL_DECK));
-        for (let i = state.deck.length - 1; i > 0; i--) {
-            const j = Math.floor(Math.random() * (i + 1));
-            [state.deck[i], state.deck[j]] = [state.deck[j], state.deck[i]];
-        }
+        shuffleDeck(state.deck);
         state.played = [];
-        state.p1 = { hand: [], wizards: [] };
-        state.p2 = { hand: [], wizards: [] };
-        state.activeTurn = 'p1';
+        state.p1.hand = []; state.p1.wizards = [];
+        state.p2.hand = []; state.p2.wizards = [];
+        
+        if (!state.p1.name) state.p1.name = 'Player 1';
+        if (!state.p2.name) state.p2.name = 'Player 2';
+        
+        stateHistory = []; 
         logLocalMessage("Deck setup fresh and ready.");
         updateUI();
     }
 
-    // Network Engine Hooks
+    function rebuildDeck() {
+        // 1. Gather all cards currently in play
+        let inPlay = [];
+        inPlay.push(...state.p1.hand, ...state.p2.hand, ...state.played);
+        state.p1.wizards.forEach(w => inPlay.push(...w.cards));
+        state.p2.wizards.forEach(w => inPlay.push(...w.cards));
+
+        // 2. Count occurrences of each card name in play to prevent duplicates
+        let inPlayCounts = {};
+        inPlay.forEach(c => { inPlayCounts[c.name] = (inPlayCounts[c.name] || 0) + 1; });
+
+        // 3. Build new deck from ORIGINAL_DECK, skipping cards that are currently in play
+        let newDeck = [];
+        let originalDeck = JSON.parse(JSON.stringify(ORIGINAL_DECK));
+        originalDeck.forEach(c => {
+            if (inPlayCounts[c.name] && inPlayCounts[c.name] > 0) {
+                inPlayCounts[c.name]--; 
+            } else {
+                newDeck.push(c); 
+            }
+        });
+
+        shuffleDeck(newDeck);
+        state.deck = newDeck;
+        syncLog("Deck exhausted. Reshuffled remaining cards from the discard pile.");
+    }
+
+    // ---- Network Engine Hooks ----
+
     document.getElementById('btn-generate').addEventListener('click', () => {
         peer = new Peer(PEER_CONFIG);
         peer.on('open', (id) => {
@@ -347,27 +411,12 @@
         });
     });
 
-    // Automatically copy host ID to clipboard upon click
     document.getElementById('session-id-display').addEventListener('click', function() {
         if (this.value) {
             navigator.clipboard.writeText(this.value).then(() => {
                 logLocalMessage("System: Host Session ID copied to clipboard!");
-            }).catch(err => {
-                console.error("Could not auto-copy Session ID: ", err);
             });
         }
-    });
-
-    // Update state when Active Turn changes
-    document.getElementById('turn-select').addEventListener('change', (e) => {
-        state.activeTurn = e.target.value;
-        syncLog(`Active Turn changed to: <b>${state.activeTurn === 'p1' ? 'Player 1' : 'Player 2'}</b>`);
-        broadcastState();
-    });
-
-    // Close tooltips when clicking outside cards
-    document.addEventListener('click', () => {
-        document.getElementById('card-tooltip').style.display = 'none';
     });
 
     function setupConnection() {
@@ -378,7 +427,12 @@
         });
         conn.on('data', (data) => { 
             if(data.type === 'state') {
+                saveState(); // Ensure receiver pushes current state to history before overwriting
                 state = data.state;
+                updateUI();
+            } else if (data.type === 'undo') {
+                stateHistory.pop(); // Discard the bad state we were on
+                state = data.state; // Accept the exact state the initiator reverted to
                 updateUI();
             } else if (data.type === 'log') {
                 logLocalMessage(data.msg);
@@ -401,71 +455,141 @@
         log.scrollTop = log.scrollHeight;
     }
 
-    // Gameplay Core
-    document.getElementById('btn-deal').addEventListener('click', () => {
-        // Validation: Require active hands to be empty before execution
+    document.addEventListener('click', () => {
+        document.getElementById('card-tooltip').style.display = 'none';
+    });
+
+    // ---- Gameplay Actions ----
+
+    function setName(player) {
+        if (myRole !== null && myRole !== player) {
+            alert("You can only change your own name!");
+            return;
+        }
+        const name = prompt("Enter your name:");
+        if (name) {
+            saveState();
+            state[player].name = sanitize(name);
+            syncLog(`Name updated to: <b>${state[player].name}</b>`);
+            broadcastState(); updateUI();
+        }
+    }
+
+    document.getElementById('btn-roll-p1').addEventListener('click', () => rollWinds('p1'));
+    document.getElementById('btn-roll-p2').addEventListener('click', () => rollWinds('p2'));
+
+    function rollWinds(roller) {
+        if (myRole !== null && myRole !== roller) {
+            alert("You can only roll for your own turn!");
+            return;
+        }
         if (state.p1.hand.length > 0 || state.p2.hand.length > 0) {
             alert("Active hands must be empty before rolling the Winds of Magic!");
             return;
         }
 
+        saveState();
         state.played = [];
         const d1 = Math.floor(Math.random() * 6) + 1;
         const d2 = Math.floor(Math.random() * 6) + 1;
+        const total = d1 + d2;
         
-        syncLog(`Winds of Magic Roll: ${d1} + ${d2} = <b>${d1+d2} cards</b>.`);
+        syncLog(`<b>${state[roller].name}</b>'s Turn: Winds of Magic Roll: ${d1} + ${d2} = <b>${total} cards</b>.`);
         
-        // Dynamically shift the odd card benefit to the player holding the active turn
-        const firstPlayer = state.activeTurn || 'p1';
-        const secondPlayer = firstPlayer === 'p1' ? 'p2' : 'p1';
+        const firstPlayer = roller;
+        const secondPlayer = roller === 'p1' ? 'p2' : 'p1';
 
-        for(let i=0; i<(d1+d2); i++) {
-            if(!state.deck.length) { state.deck = JSON.parse(JSON.stringify(ORIGINAL_DECK)); }
+        for(let i=0; i<total; i++) {
+            if(state.deck.length === 0) rebuildDeck();
+            if(state.deck.length === 0) break; // Safety net
             if(i % 2 === 0) state[firstPlayer].hand.push(state.deck.pop());
             else state[secondPlayer].hand.push(state.deck.pop());
         }
         broadcastState(); updateUI();
-    });
+    }
 
-    document.getElementById('btn-draw-p1').addEventListener('click', () => { 
-        if(state.deck.length) state.p1.hand.push(state.deck.pop()); 
-        syncLog("P1 drew 1 card.");
-        broadcastState(); updateUI(); 
-    });
-    
-    document.getElementById('btn-draw-p2').addEventListener('click', () => { 
-        if(state.deck.length) state.p2.hand.push(state.deck.pop()); 
-        syncLog("P2 drew 1 card.");
-        broadcastState(); updateUI(); 
-    });
+    function drawTo(player, pool, wizIdx = null) {
+        if (myRole !== null && myRole !== player) {
+            alert("You can only draw cards for your own side!");
+            return;
+        }
+        
+        saveState();
+        if (state.deck.length === 0) rebuildDeck();
+        if (state.deck.length === 0) return; // Still empty? Exit.
+        
+        const card = state.deck.pop();
+        if (pool === 'hand') {
+            state[player].hand.push(card);
+            syncLog(`${state[player].name} drew 1 card to Hand.`);
+        } else if (pool === 'wizard') {
+            state[player].wizards[wizIdx].cards.push(card);
+            syncLog(`${state[player].name} drew 1 card to storage: <b>${state[player].wizards[wizIdx].name}</b>.`);
+        }
+        
+        if (state.deck.length === 0) {
+            rebuildDeck(); // Automatically trigger a reshuffle if that pull exhausted the deck
+        }
+        broadcastState(); updateUI();
+    }
     
     document.getElementById('btn-clear-field').addEventListener('click', () => { 
+        saveState();
         state.played = []; 
-        state.p1.hand = []; // Clear active hands along with field wipe
+        state.p1.hand = []; 
         state.p2.hand = [];
-        syncLog("<b>Phase Ended / Field and Active Hands wiped clear.</b>"); 
+        syncLog("<b>Phase Ended. Field and Active Hands wiped clear.</b>"); 
         broadcastState(); updateUI(); 
+    });
+
+    document.getElementById('btn-undo').addEventListener('click', () => {
+        if (stateHistory.length === 0) {
+            alert("No history to undo.");
+            return;
+        }
+        let prevState = JSON.parse(stateHistory.pop());
+        
+        // If a card is returned to the deck, shuffle it
+        if (prevState.deck.length > state.deck.length) {
+            shuffleDeck(prevState.deck);
+            syncLog("Action undone. Cards returned and deck shuffled.");
+        } else {
+            syncLog("Action undone.");
+        }
+        
+        state = prevState;
+        updateUI();
+        if (conn && conn.open) {
+            conn.send({ type: 'undo', state: state }); // Broadcast explicit rollback target
+        }
     });
 
     function addWizard(player) {
-        // Enforce player-scoped separation rules for layout modification permissions
         if (myRole !== null && myRole !== player) {
             alert("You can only add wizard storage for your own side!");
             return;
         }
         const name = prompt("Enter Wizard's Identification Name:", "");
         if(!name) return;
-        state[player].wizards.push({ name: name, cards: [] });
+        saveState();
+        state[player].wizards.push({ name: sanitize(name), cards: [] });
+        syncLog(`${state[player].name} added wizard storage: <b>${sanitize(name)}</b>`);
         broadcastState(); updateUI();
     }
 
     function removeWizard(player, index) {
+        if (myRole !== null && myRole !== player) {
+            alert("Cannot delete opponent's wizard storage.");
+            return;
+        }
+        saveState();
         state[player].hand.push(...state[player].wizards[index].cards);
+        syncLog(`${state[player].name} removed wizard storage: <b>${state[player].wizards[index].name}</b>`);
         state[player].wizards.splice(index, 1);
         broadcastState(); updateUI();
     }
 
-    // --- Drag and Drop Engine ---
+    // ---- Drag and Drop Engine ----
     let draggedCardData = null;
 
     function handleDragStart(e, item, sourcePlayer, sourcePool, sourceWizIdx = null) {
@@ -495,6 +619,8 @@
             element.classList.remove('drag-over');
             if (!draggedCardData) return;
 
+            saveState(); // Commit current state prior to modifying drop targets
+
             const targetPool = element.getAttribute('data-pool');
             const targetPlayer = element.getAttribute('data-player');
             const targetWizIdx = element.getAttribute('data-wiz-idx');
@@ -512,15 +638,14 @@
                 state[targetPlayer].hand.push(cardObj);
             } else if(targetPool === 'played') {
                 state.played.push(cardObj);
-                const pName = draggedCardData.sourcePlayer === 'p1' ? 'Player 1' : 'Player 2';
+                const pName = draggedCardData.sourcePlayer === 'p1' ? state.p1.name : state.p2.name;
                 syncLog(`<span style="color:var(--accent-color)">${pName} played: <b>${cardObj.name}</b></span>`);
             } else if(targetPool === 'wizard') {
                 state[targetPlayer].wizards[targetWizIdx].cards.push(cardObj);
             }
 
             draggedCardData = null;
-            broadcastState();
-            updateUI();
+            broadcastState(); updateUI();
         });
     }
 
@@ -528,10 +653,14 @@
     setupDropZone(document.getElementById('p2-hand'));
     setupDropZone(document.getElementById('center-played'));
 
-    // UI Updates
     function updateUI() {
         document.getElementById('deck-count').innerText = `Cards in Deck: ${state.deck.length}`;
-        document.getElementById('turn-select').value = state.activeTurn || 'p1';
+        
+        document.getElementById('p1-name-display').innerText = state.p1.name;
+        document.getElementById('p2-name-display').innerText = state.p2.name;
+        
+        document.getElementById('btn-roll-p1').innerHTML = `Draw for <strong>${state.p1.name}</strong>'s turn`;
+        document.getElementById('btn-roll-p2').innerHTML = `Draw for <strong>${state.p2.name}</strong>'s turn`;
         
         renderCardContainer(document.getElementById('p1-hand'), state.p1.hand, 'p1', 'hand');
         renderCardContainer(document.getElementById('p2-hand'), state.p2.hand, 'p2', 'hand');
@@ -564,9 +693,8 @@
                     cardEl.appendChild(badge);
                 }
 
-                // Changed from hover trigger to single-click trigger
                 cardEl.addEventListener('click', (e) => {
-                    e.stopPropagation(); // Stops immediate trigger closure on window
+                    e.stopPropagation(); 
                     const tooltip = document.getElementById('card-tooltip');
                     tooltip.innerHTML = CARD_RULES[card.name] || 'Standard rules apply.';
                     tooltip.style.display = 'block';
@@ -589,7 +717,10 @@
             div.innerHTML = `
                 <div class="wizard-header">
                     <span class="wizard-title">${wiz.name}</span>
-                    <button class="danger" style="padding:2px 6px; font-size:10px;" onclick="removeWizard('${player}', ${wIdx})">X</button>
+                    <div>
+                        <button class="sm-btn" onclick="drawTo('${player}', 'wizard', ${wIdx})">Draw 1</button>
+                        <button class="sm-btn danger" onclick="removeWizard('${player}', ${wIdx})">X</button>
+                    </div>
                 </div>
                 <div id="${player}-wiz-${wIdx}" class="drop-zone" style="min-height:90px;" data-pool="wizard" data-player="${player}" data-wiz-idx="${wIdx}"></div>
             `;
