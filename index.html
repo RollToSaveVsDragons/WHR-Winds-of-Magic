@@ -38,6 +38,14 @@
             box-shadow: 0 4px 15px rgba(0,0,0,0.6);
         }
 
+        .disclaimer {
+            text-align: center;
+            font-size: 0.8rem;       /* Keeps the font smaller */
+            color: var(--text-color); /* Matches your theme */
+            opacity: 0.7;            /* Makes it slightly faded */
+            margin-top: 8px;       /* Pulls it closer to the h1 */
+        }
+
         h1, h2, h3 { text-align: center; color: var(--accent-color); margin: 5px 0; }
         
         .flex-center { display: flex; align-items: center; justify-content: space-between; margin-bottom: 5px; }
@@ -227,7 +235,11 @@
 
 <div class="container">
     <h1>Warhammer Renaissance - Winds of Magic</h1>
-    
+
+    <p class="disclaimer">
+        This application is free software, licensed under the GNU General Public License v3.0 (GPL-3.0). Not affiliated with the creators of Warhammer Renaissance.
+    </p>
+
     <div class="network-panel">
         <div>Status: <span id="connection-status" class="status-disconnected">Disconnected</span></div>
         <input type="text" id="session-id-input" placeholder="Enter Session ID to Rejoin / Join">
