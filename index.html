@@ -439,7 +439,6 @@
     });
 
     document.getElementById('btn-join').addEventListener('click', () => {
-        // Prevent a host from accidentally overwriting their session and joining themselves
         if (myRole === 'p1') {
             alert("You are already hosting! Share the Session ID with your opponent so they can join you. (If you meant to join someone else, please refresh the page first).");
             return;
